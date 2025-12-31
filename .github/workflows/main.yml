@@ -106,5 +106,4 @@ jobs:
       run: |
         # 测试直接运行脚本（模拟不同step）
         echo "=== Direct test ==="
-        export PKG_CONFIG_PATH="/test/path"
         ./script1.sh
