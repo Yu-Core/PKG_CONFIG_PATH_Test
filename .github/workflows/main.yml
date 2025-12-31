@@ -1,109 +1,181 @@
-name: Test Environment Inheritance
+name: Test Environment Variable Inheritance
 
 on:
   workflow_dispatch:
 
 jobs:
-  test-env:
+  test:
     runs-on: ubuntu-latest
     
     steps:
-    - uses: actions/checkout@v3
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v3
+      with:
+        dotnet-version: '8.x'
     
     - name: Create test scripts
       run: |
-        # script1.sh
-        cat > script1.sh << 'EOF'
+        # 创建 script1.sh
+        cat << 'EOF' > script1.sh
         #!/bin/bash
         echo "=== Script 1 ==="
-        echo "PKG_CONFIG_PATH from C#: $PKG_CONFIG_PATH"
-        echo "Custom ENV: $CUSTOM_VAR"
+        echo "PKG_CONFIG_PATH: $PKG_CONFIG_PATH"
+        echo "CUSTOM_VAR: $CUSTOM_VAR"
         
-        # Export additional variables if needed
-        export EXTRA_VAR="extra_value"
+        # 导出额外变量
+        export ADDITIONAL_VAR="from_script1"
         
-        echo "--- Calling Script 2 ---"
-        ./script2.sh
-        
-        echo "--- Calling Script 2 with sudo ---"
-        sudo -E ./script2.sh
-        EOF
-        
-        # script2.sh
-        cat > script2.sh << 'EOF'
+        # 创建并执行 script2.sh
+        cat << 'EOF2' > script2.sh
         #!/bin/bash
         echo "=== Script 2 ==="
         echo "PKG_CONFIG_PATH: $PKG_CONFIG_PATH"
         echo "CUSTOM_VAR: $CUSTOM_VAR"
-        echo "EXTRA_VAR: $EXTRA_VAR"
+        echo "ADDITIONAL_VAR: $ADDITIONAL_VAR"
         
-        # Test launching script3
-        echo "--- Calling Script 3 ---"
-        ./script3.sh
+        # 验证 pkg-config 能否读取
+        if command -v pkg-config &> /dev/null; then
+            echo "pkg-config found, PKG_CONFIG_PATH contains:"
+            echo "$PKG_CONFIG_PATH" | tr ':' '\n' | while read dir; do
+                if [ -d "$dir" ]; then
+                    echo "  ✓ $dir"
+                else
+                    echo "  ✗ $dir (does not exist)"
+                fi
+            done
+        else
+            echo "pkg-config not installed"
+        fi
+        EOF2
+        
+        chmod +x script2.sh
+        echo "--- Executing Script 2 ---"
+        ./script2.sh
+        
+        # 测试 sudo 下的环境继承
+        echo "--- Testing with sudo ---"
+        sudo bash -c "echo 'In sudo shell: PKG_CONFIG_PATH=\$PKG_CONFIG_PATH'"
+        
         EOF
         
-        # script3.sh
-        cat > script3.sh << 'EOF'
-        #!/bin/bash
-        echo "=== Script 3 ==="
-        echo "PKG_CONFIG_PATH: $PKG_CONFIG_PATH"
-        echo "All env vars with PKG:"
-        env | grep -i pkg
-        EOF
+        # 设置执行权限
+        chmod +x script1.sh
         
-        chmod +x script*.sh
+        # 列出文件确认
+        echo "Created files:"
+        ls -la script*.sh
     
     - name: Create and run C# program
       run: |
-        # 创建C#程序
-        cat > Program.cs << 'EOF'
+        # 创建 C# 程序
+        cat << 'EOF' > Program.cs
         using System;
         using System.Diagnostics;
+        using System.IO;
         
         class Program
         {
             static void Main()
             {
                 // 设置环境变量
-                Environment.SetEnvironmentVariable("PKG_CONFIG_PATH", 
-                    "/usr/local/lib/pkgconfig:/custom/path");
-                Environment.SetEnvironmentVariable("CUSTOM_VAR", 
-                    "from_csharp_program");
+                string currentPath = Environment.GetEnvironmentVariable("PKG_CONFIG_PATH") ?? "";
+                string newPath = "/usr/local/lib/pkgconfig:/custom/path/pkgconfig";
+                if (!string.IsNullOrEmpty(currentPath))
+                {
+                    newPath = $"{newPath}:{currentPath}";
+                }
                 
-                Console.WriteLine($"C# - PKG_CONFIG_PATH: {Environment.GetEnvironmentVariable("PKG_CONFIG_PATH")}");
+                Environment.SetEnvironmentVariable("PKG_CONFIG_PATH", newPath);
+                Environment.SetEnvironmentVariable("CUSTOM_VAR", "set_from_csharp");
+                
+                Console.WriteLine($"C#: PKG_CONFIG_PATH = {Environment.GetEnvironmentVariable("PKG_CONFIG_PATH")}");
+                Console.WriteLine($"C#: CUSTOM_VAR = {Environment.GetEnvironmentVariable("CUSTOM_VAR")}");
+                
+                // 获取脚本的绝对路径
+                string workspace = Environment.GetEnvironmentVariable("GITHUB_WORKSPACE") ?? Directory.GetCurrentDirectory();
+                string scriptPath = Path.Combine(workspace, "script1.sh");
+                
+                Console.WriteLine($"C#: Script path = {scriptPath}");
+                Console.WriteLine($"C#: Current directory = {Directory.GetCurrentDirectory()}");
+                
+                if (!File.Exists(scriptPath))
+                {
+                    Console.WriteLine("ERROR: Script file not found!");
+                    Console.WriteLine("Files in current directory:");
+                    foreach (var file in Directory.GetFiles(Directory.GetCurrentDirectory()))
+                    {
+                        Console.WriteLine($"  {file}");
+                    }
+                    return;
+                }
                 
                 var processInfo = new ProcessStartInfo
                 {
                     FileName = "/bin/bash",
-                    Arguments = "./script1.sh",
+                    Arguments = scriptPath,
                     UseShellExecute = false,
-                    RedirectStandardOutput = true
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    WorkingDirectory = Path.GetDirectoryName(scriptPath)
                 };
                 
-                // 可选：显式传递所有环境变量
-                foreach (System.Collections.DictionaryEntry de in Environment.GetEnvironmentVariables())
-                {
-                    processInfo.EnvironmentVariables[de.Key.ToString()] = de.Value.ToString();
-                }
+                // 显式传递环境变量（实际上会自动继承，但这样更明确）
+                processInfo.EnvironmentVariables["PKG_CONFIG_PATH"] = 
+                    Environment.GetEnvironmentVariable("PKG_CONFIG_PATH");
+                processInfo.EnvironmentVariables["CUSTOM_VAR"] = 
+                    Environment.GetEnvironmentVariable("CUSTOM_VAR");
+                
+                Console.WriteLine("C#: Starting script...");
                 
                 using (var process = Process.Start(processInfo))
                 {
+                    string output = process.StandardOutput.ReadToEnd();
+                    string error = process.StandardError.ReadToEnd();
                     process.WaitForExit();
-                    Console.WriteLine("C# output from script1:");
-                    Console.WriteLine(process.StandardOutput.ReadToEnd());
+                    
+                    Console.WriteLine("=== Script Output ===");
+                    Console.WriteLine(output);
+                    
+                    if (!string.IsNullOrEmpty(error))
+                    {
+                        Console.WriteLine("=== Script Errors ===");
+                        Console.WriteLine(error);
+                    }
+                    
+                    Console.WriteLine($"Script exit code: {process.ExitCode}");
                 }
             }
         }
         EOF
         
-        # 编译运行
-        dotnet new console -n TestEnv --force
-        cp Program.cs TestEnv/
-        cd TestEnv
-        dotnet run
+        # 创建项目文件
+        cat << 'EOF' > test-env.csproj
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <OutputType>Exe</OutputType>
+            <TargetFramework>net8.0</TargetFramework>
+            <ImplicitUsings>enable</ImplicitUsings>
+            <Nullable>enable</Nullable>
+          </PropertyGroup>
+        </Project>
+        EOF
+        
+        # 编译并运行
+        echo "=== Compiling C# program ==="
+        dotnet build
+        
+        echo "=== Running C# program ==="
+        dotnet run --no-build
+        
+        # 清理
+        rm -f script2.sh
     
     - name: Direct script test
       run: |
-        # 测试直接运行脚本（模拟不同step）
-        echo "=== Direct test ==="
+        echo "=== Testing script directly ==="
+        export PKG_CONFIG_PATH="/direct/test/path"
+        export CUSTOM_VAR="direct_test"
         ./script1.sh
