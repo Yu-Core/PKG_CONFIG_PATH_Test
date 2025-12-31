@@ -1,0 +1,110 @@
+name: Test Environment Inheritance
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-env:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Create test scripts
+      run: |
+        # script1.sh
+        cat > script1.sh << 'EOF'
+        #!/bin/bash
+        echo "=== Script 1 ==="
+        echo "PKG_CONFIG_PATH from C#: $PKG_CONFIG_PATH"
+        echo "Custom ENV: $CUSTOM_VAR"
+        
+        # Export additional variables if needed
+        export EXTRA_VAR="extra_value"
+        
+        echo "--- Calling Script 2 ---"
+        ./script2.sh
+        
+        echo "--- Calling Script 2 with sudo ---"
+        sudo -E ./script2.sh
+        EOF
+        
+        # script2.sh
+        cat > script2.sh << 'EOF'
+        #!/bin/bash
+        echo "=== Script 2 ==="
+        echo "PKG_CONFIG_PATH: $PKG_CONFIG_PATH"
+        echo "CUSTOM_VAR: $CUSTOM_VAR"
+        echo "EXTRA_VAR: $EXTRA_VAR"
+        
+        # Test launching script3
+        echo "--- Calling Script 3 ---"
+        ./script3.sh
+        EOF
+        
+        # script3.sh
+        cat > script3.sh << 'EOF'
+        #!/bin/bash
+        echo "=== Script 3 ==="
+        echo "PKG_CONFIG_PATH: $PKG_CONFIG_PATH"
+        echo "All env vars with PKG:"
+        env | grep -i pkg
+        EOF
+        
+        chmod +x script*.sh
+    
+    - name: Create and run C# program
+      run: |
+        # 创建C#程序
+        cat > Program.cs << 'EOF'
+        using System;
+        using System.Diagnostics;
+        
+        class Program
+        {
+            static void Main()
+            {
+                // 设置环境变量
+                Environment.SetEnvironmentVariable("PKG_CONFIG_PATH", 
+                    "/usr/local/lib/pkgconfig:/custom/path");
+                Environment.SetEnvironmentVariable("CUSTOM_VAR", 
+                    "from_csharp_program");
+                
+                Console.WriteLine($"C# - PKG_CONFIG_PATH: {Environment.GetEnvironmentVariable("PKG_CONFIG_PATH")}");
+                
+                var processInfo = new ProcessStartInfo
+                {
+                    FileName = "/bin/bash",
+                    Arguments = "./script1.sh",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true
+                };
+                
+                // 可选：显式传递所有环境变量
+                foreach (System.Collections.DictionaryEntry de in Environment.GetEnvironmentVariables())
+                {
+                    processInfo.EnvironmentVariables[de.Key.ToString()] = de.Value.ToString();
+                }
+                
+                using (var process = Process.Start(processInfo))
+                {
+                    process.WaitForExit();
+                    Console.WriteLine("C# output from script1:");
+                    Console.WriteLine(process.StandardOutput.ReadToEnd());
+                }
+            }
+        }
+        EOF
+        
+        # 编译运行
+        dotnet new console -n TestEnv --force
+        cp Program.cs TestEnv/
+        cd TestEnv
+        dotnet run
+    
+    - name: Direct script test
+      run: |
+        # 测试直接运行脚本（模拟不同step）
+        echo "=== Direct test ==="
+        export PKG_CONFIG_PATH="/test/path"
+        ./script1.sh
