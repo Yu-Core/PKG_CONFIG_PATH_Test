@@ -9,15 +9,7 @@ jobs:
     
     steps:
     - uses: actions/checkout@v4
-    
-    - name: Set up JDK
-      uses: actions/setup-java@v4
-      with:
-        java-version: '11'
-    
-    - name: Setup Android SDK
-      uses: android-actions/setup-android@v3
-    
+
     - name: Check NDK info
       run: |
         echo "ANDROID_HOME: $ANDROID_HOME"
